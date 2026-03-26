@@ -10,6 +10,7 @@ import {
   XLAYER_CAIP2
 } from "@/lib/x402";
 import { addInvokeLog } from "@/lib/store";
+import { X402_PAYMENT_HEADER } from "@/lib/x402Shared";
 
 // Prefer ai2human-style env naming, fallback to legacy var
 const PAY_TO =
@@ -133,7 +134,7 @@ export async function POST(
   if (!skill) return NextResponse.json({ error: "Skill not found" }, { status: 404 });
 
   const freeTrial = isFreeTrial();
-  const paymentHeader = req.headers.get("X-PAYMENT") || req.headers.get("x-payment");
+  const paymentHeader = req.headers.get(X402_PAYMENT_HEADER) || req.headers.get(X402_PAYMENT_HEADER.toLowerCase());
 
   // If not free trial and no payment header → return 402
   if (!freeTrial && !paymentHeader) {
