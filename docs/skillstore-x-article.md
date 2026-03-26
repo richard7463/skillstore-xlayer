@@ -2,333 +2,346 @@
 
 ## Recommended Title
 
-**x402 Per-Call Payments, OnchainOS Skill Execution, All Audited on X Layer: How SkillStore Turns AI Capabilities Into an Open Marketplace**
+**OnchainOS Skills, x402 Exact Payments, and One Auditable Invoke Loop on X Layer: How SkillStore Turns Agent Capabilities Into Onchain Infrastructure**
 
 ## Publish-Ready Article
 
-SkillStore is an open skill marketplace for AI agents on X Layer.
+SkillStore is not a generic API marketplace with a crypto checkout.
 
-Any developer publishes a Skill. Any agent discovers and invokes it. Payment happens per call via x402 — automatic, onchain, no subscriptions, no invoices, no trust required.
+SkillStore is an execution layer for agent capabilities on X Layer.
 
-The core loop is three lines:
+The problem starts when an agent needs a capability it does not own.
 
-`discover -> invoke -> pay -> result`
+Maybe it needs a trade precheck before routing size.
+Maybe it needs wallet anomaly detection before taking custody action.
+Maybe it needs a gas read across multiple chains before choosing timing.
+Maybe it needs a portfolio explanation in plain language after an onchain action completes.
 
-And the payment line is not cosmetic.
+Right now, that capability handoff usually breaks in one of three ways:
 
-It is `transferWithAuthorization` on X Layer mainnet with USDT0. Every invocation is audited onchain. Every settled call produces a verifiable artifact.
+- the function lives in a private codebase
+- the payment path depends on human subscription setup
+- the result comes back without a machine-native settlement receipt
+
+That is not a real agent economy.
+
+That is a world where every team keeps rebuilding the same tools, and where machine-to-machine usage still depends on human billing rails.
+
+SkillStore exists to close that gap.
+
+The simplest way to say it is still the best one:
+
+**SkillStore is the App Store for OnchainOS AI Skills, where agents discover, pay, invoke, and receive results inside one x402-native loop on X Layer.**
+
+And the core loop is:
+
+`discover -> challenge -> authorize -> settle -> execute -> audit`
+
+That wording matters.
+
+We are not trying to say "developers can upload APIs."
+We are not trying to build a broad SaaS billing layer.
+We are not trying to make a generic endpoint directory look onchain.
+
+The product is narrower and much more useful:
+
+When an agent needs a specialized OnchainOS capability, how does it find that capability, pay exactly once for that invocation, receive the result, and continue execution without leaving an auditable machine flow?
+
+That is the whole point.
 
 Project links:
 
 - Live demo: https://skillstore-xlayer.vercel.app
 - GitHub: https://github.com/richard7463/skillstore-xlayer
-- X Layer explorer: https://www.oklink.com/xlayer
 - Skills API: https://skillstore-xlayer.vercel.app/api/skills
+- Health / proof: https://skillstore-xlayer.vercel.app/api/health
+- X Layer explorer: https://www.oklink.com/xlayer
 
 ## Why This Problem Exists
 
-AI agents are proliferating fast.
+AI agents are improving quickly.
 
-They can already search, analyze, plan, generate, route data, trade, monitor wallets, and increasingly execute complex onchain workflows. In many cases, the model is not the bottleneck anymore. The tooling is.
+They can already search, rank, route, summarize, monitor wallets, evaluate markets, and coordinate multi-step actions. In many workflows, the model is no longer the hardest part. Capability access is.
 
-The break usually appears here:
+The break usually appears at the exact moment an agent needs a function it was not shipped with.
 
-Every agent needs capabilities beyond what it was trained to do. And right now, the way agents acquire those capabilities is fragmented, opaque, and monetization-hostile.
+Today, that usually means:
 
-A developer writes a useful onchain analytics function. It lives in a private codebase. Another developer somewhere else writes the same function from scratch. The first developer gets no compensation. The second developer wastes three days.
+- finding some API in docs or Discord
+- dealing with API keys and dashboard accounts
+- attaching a human billing method
+- managing monthly subscription state
+- hoping the result format is reusable by downstream agents
 
-That is not an agent economy. That is an agent ecosystem where every team is an island.
+That is a poor fit for autonomous software.
 
-There is a deeper problem underneath this:
+If the caller is an agent, the payment path should not depend on a human opening a browser.
+If the capability is sold per use, the pricing unit should be the invocation itself.
+If the result is valuable, the completion should return with a machine-readable receipt.
 
-When agents need to pay for capabilities, the existing payment rails are not designed for machine-to-machine flows. Subscription management requires human intent. API key billing requires human setup. OAuth requires browser sessions.
-
-None of that is compatible with an autonomous agent that needs to query a skill, pay for it, and get a result inside a single execution loop.
-
-That is the gap SkillStore is built to close.
+Without those pieces, "agent monetization" is still mostly a human-admin story.
 
 ## What SkillStore Actually Is
 
 The cleanest definition is still the simplest one:
 
-**SkillStore is an App Store for onchain AI Skills, where agents pay per call via x402 on X Layer.**
+**SkillStore is execution and monetization infrastructure for onchain agent capabilities.**
 
-That wording is deliberate.
+That definition is deliberate.
 
-We are not positioning this as a generic API marketplace.
+A Skill in SkillStore is not just an endpoint listing.
 
-We are not trying to say "developers can monetize their endpoints."
-
-We are not trying to build the broadest possible SaaS billing platform.
-
-The product is much narrower and, in our view, much more important:
-
-When an autonomous agent needs a specialized onchain capability — trade precheck, wallet risk monitoring, gas optimization, MEV detection, portfolio analysis, trend signals — how does it discover, invoke, and pay for that capability in one uninterrupted machine flow?
-
-That is the entire point.
-
-In SkillStore, a Skill is not just a wrapped API endpoint.
-
-It is a composable agent capability with:
+It is a capability unit with:
 
 - a defined input schema
-- an explicit OnchainOS dependency chain
-- a per-call x402 payment requirement on X Layer
-- an auditable execution record
+- explicit OnchainOS dependencies
+- a per-call price
+- an x402 challenge path
+- an execution result
+- an auditable invoke record
 
 The logic is not:
 
-"A developer has a useful function. Who wants to subscribe?"
+"A developer has an API. Who wants a subscription?"
 
 The logic is:
 
-"An agent needs a capability it does not own. It discovers the Skill, pays exactly once via x402 on X Layer, receives a verified result, and continues its workflow."
+"An agent needs a capability it does not own. The system should expose the capability, return a machine-payable challenge, settle exactly one invocation on X Layer, execute the call, and return a result plus receipt."
 
-That is why SkillStore should be understood as execution infrastructure for the agent economy, not as a billing dashboard.
+That is why SkillStore should be read as infrastructure, not as a marketplace skin.
 
-## How x402 Makes the A2A Flow Possible
+## The Most Important Technical Shift
 
-This is the most important technical claim in the project.
+This is the part we changed to make the product stronger.
 
-The conventional API payment flow requires a human in the loop at some point:
+The old version only did half of the payment path:
 
-- someone creates an account
-- someone adds a payment method
-- someone manages subscription state
-- someone handles billing failures
+- return a `402 Payment Required` challenge
+- validate the signed x402 payload
+- optionally inspect a caller-provided transaction hash
 
-None of that works when the caller is an agent operating autonomously at 3am.
+That is not enough.
 
-x402 eliminates that human dependency.
+It proves the caller can sign.
+It does not prove SkillStore actually completed the x402 settlement loop the way a production buyer or judge would expect.
 
-The protocol is simple and brutal in the right way:
+The current flow now mirrors the `OmniClaw` / `ai2human` approach:
 
-1. Agent sends `POST /api/skills/{id}/invoke`
-2. Server responds `402 Payment Required` with a payment challenge: amount, recipient address, asset, network
+1. Agent requests `POST /api/skills/{id}/invoke?mode=paid`
+2. Server returns `402` with challenge details: amount, asset, payTo, network
 3. Agent signs `transferWithAuthorization` for USDT0 on X Layer
-4. Agent retries with `X-PAYMENT` header containing the signed authorization
-5. Server verifies the authorization structure, executes the Skill, returns the result
-6. Audit record is written onchain
+4. SkillStore facilitator relays `transferWithAuthorization` onchain
+5. Server waits for receipt success
+6. Server executes the Skill
+7. Server returns the result plus `X-PAYMENT-RESPONSE`
 
-No subscriptions. No API keys. No account creation. No human approval.
+That is a much stronger claim than "we accept signed headers."
 
-The agent discovers, pays, and receives a result inside one execution loop.
+It says:
 
-That is what makes SkillStore an agent-native payment architecture rather than a developer billing dashboard with an agent-themed front end.
+**the invoke path itself is payment-settled, receipt-bearing, and auditable on X Layer**
 
-## The Six Skills and What They Actually Do
+## Why x402 Is on the Critical Path
 
-Each Skill in SkillStore is designed around a real OnchainOS capability, not a mock endpoint.
+We did not want x402 to look like a decorative payment footnote.
 
-**🛡️ TradeGuardian — 0.003 USDT0 / call**
+If a product says "we use x402" but the core experience still depends on off-platform billing or manual setup, then x402 is not really part of the execution architecture.
 
-The most-used Skill in the marketplace. Before any trade executes, TradeGuardian queries Wallet API for signer balance, Market API for live quote, and Trade API for slippage estimate. Returns a GO / HOLD / ABORT signal with full reasoning. Prevents agents from wasting gas on bad routes or executing into thin liquidity.
+In SkillStore, x402 sits in the middle of the capability loop:
 
-OnchainOS dependencies: Wallet API, Market API, Trade API, audit-log
+- discovery happens before invocation
+- invocation returns a payment challenge
+- settlement happens before execution
+- execution returns only after payment is finalized
+- the response includes a machine-readable receipt
 
-**📡 XLayerRadar — 0.001 USDT0 / call**
+That ordering matters.
 
-Real-time anomaly detection for any X Layer wallet. Monitors for abnormal transfers, large outflows, new contract interactions, and suspicious approval patterns. Fires structured alerts the moment something diverges from baseline. Uses Wallet API and onchain-gateway for multi-chain cross-check.
+Payment is not detached from usage.
+Payment is not deferred into some account dashboard.
+Payment is not handled by a human operator after the fact.
 
-OnchainOS dependencies: Wallet API, onchain-gateway, audit-log
+Payment is part of the invoke state machine.
 
-**⛽ GasOracle — 0.001 USDT0 / call**
+That is the part we want builders and judges to notice.
 
-The highest-call-volume Skill on the platform. Pulls real-time Gas prices across 20+ chains via OKX Agent Trade Kit. Returns optimal execution window, estimated cost in USD, and recommended RPC. Saves agents from overpaying during congestion spikes.
+## The Core Loop
 
-OnchainOS dependencies: Market API, Agent Trade Kit MCP
+The loop is intentionally narrow:
 
-**📊 PortfolioPulse — 0.003 USDT0 / call**
+`discover -> challenge -> authorize -> settle -> execute -> audit`
 
-Fetches X Layer portfolio data via Wallet API and dex-token, then produces a natural language report: P&L, risk exposure, rebalancing suggestions, and an exportable onchain attestation. Built for agents that need to explain positions to users in plain language.
+Each step matters.
 
-OnchainOS dependencies: Wallet API, Market API, dex-token, audit-log
+### Discover
 
-**🔭 MEVShield — 0.002 USDT0 / call**
+An agent queries the Skill directory and evaluates what capability fits the task.
 
-Checks any pending transaction for sandwich attack risk before submission. Returns MEV risk score, estimated frontrun exposure, and the recommended private RPC endpoint from OKX onchain-gateway to bypass the public mempool. Integrates with OKX security Skill for contract risk scoring.
+The listing already tells the agent:
 
-OnchainOS dependencies: onchain-gateway, security, Market API
+- what the Skill does
+- what category it belongs to
+- which chains it supports
+- which OnchainOS APIs it uses
+- what the per-call price is
 
-**🌊 TrendSignal — 0.005 USDT0 / call**
+### Challenge
 
-The highest-value signal Skill. Combines OKX dex-signal momentum data and dex-trenches whale flow analysis to surface early-stage token opportunities on X Layer. Filters rug-pulls via security Skill. Returns a conviction score and entry window for each signal.
+The server responds with a `402` challenge that defines the payment terms for one invocation.
 
-OnchainOS dependencies: dex-signal, dex-trenches, Market API, security, audit-log
+That includes:
 
-All six Skills run through the same x402 payment path. All six produce an `auditId` that links the invocation to an onchain log.
+- network
+- asset
+- recipient
+- amount
+- timeout
+- resource
 
-## The A2A Protocol: What Happens Inside the Invocation
+The system is not asking the agent to negotiate billing.
+It is asking the agent to satisfy one exact payment requirement.
 
-The A2A (Agent-to-Agent) protocol is three steps.
+### Authorize
 
-```
-# Step 1: Agent discovers Skills
-GET /api/skills?category=DeFi
-→ returns list, pricing, input schema, OnchainOS dependencies
+The agent signs EIP-3009 `transferWithAuthorization`.
 
-# Step 2: Agent invokes Skill — receives 402 challenge
-POST /api/skills/trade-guardian/invoke
-← 402 Payment Required
-  recipient: 0x3f665386b41Fa15c5ccCeE983050a236E6a10108
-  amount: 3000 (0.003 USDT0, 6 decimals)
-  asset: 0x779ded0c9e1022225f8e0630b35a9b54be713736 (USDT0 on X Layer)
-  network: eip155:196
+This is not an invoice promise or a later subscription event.
+It is an authorization tied to one invocation flow.
 
-# Step 3: Agent signs transferWithAuthorization, retries with X-PAYMENT header
-POST /api/skills/trade-guardian/invoke
-X-PAYMENT: { txHash: "0x9c01...", authorization: { ... } }
-→ Server verifies → executes Skill → returns result
-→ 200 OK: { signal: "GO", walletBalance: "245.00", ... }
-```
+### Settle
 
-The entire flow is machine-executable with zero human intervention.
+SkillStore relays the transfer on X Layer and waits for receipt confirmation.
 
-That is not a future roadmap claim. That is how the demo runs today.
+This is the part that moves the project from "payment-aware" to "payment-executing."
 
-## Why X Layer Is Part of the Product Logic — Not Just a Payment Rail
+### Execute
 
-We did not want this project to read like an offchain Skill registry that happens to accept crypto payments.
+Only after settlement succeeds does the Skill execute.
 
-If X Layer only appeared as a token transfer at the very end, the submission would be much weaker.
+That is what makes the payment boundary meaningful.
 
-The goal is to show that X Layer is part of the execution architecture at multiple layers:
+### Audit
 
-- **Payment layer:** x402 payments use USDT0 `transferWithAuthorization` on X Layer mainnet (Chain ID 196)
-- **Audit layer:** every invocation writes a structured audit record keyed to an onchain transaction
-- **Skill layer:** TradeGuardian, XLayerRadar, PortfolioPulse all call OnchainOS APIs that operate natively on X Layer
-- **Signal layer:** TrendSignal surfaces token opportunities specifically on X Layer via dex-signal and dex-trenches
+The result returns with an `auditId`, and the settlement response returns with receipt metadata.
 
-X Layer is not attached at the end of the flow.
+That means the invocation can be replayed as a machine action, not just described as one.
 
-It is part of the route selection, execution, and audit logic.
+## The Six Skills and Why They Matter
 
-That is what makes the `invoke -> pay -> result` loop meaningful as an onchain system rather than a hosted SaaS with a crypto payment option.
+We intentionally used Skills that feel operational, not decorative.
 
-## Onchain Execution Proof
+The current set includes:
 
-Every Skill invocation on SkillStore produces a verifiable audit record.
+- `TradeGuardian`: Wallet API + Market API + Trade API precheck before a trade
+- `XLayerRadar`: wallet anomaly detection and risk signaling
+- `GasOracle`: multi-chain gas monitor and execution timing
+- `PortfolioPulse`: wallet-to-report capability for user-facing narratives
+- `MEVShield`: sandwich-risk check and private routing recommendation
+- `TrendSignal`: early token signal detection through OKX data surfaces
 
-The demo settlement was executed on X Layer mainnet:
+These are not random demo endpoints.
 
-- **Network:** X Layer mainnet (Chain ID 196)
-- **Asset:** USDT0 / USD₮0 (`0x779ded0c9e1022225f8e0630b35a9b54be713736`)
-- **Payment method:** `transferWithAuthorization` via x402 protocol
-- **Audit log:** Keyed to `auditId` returned in every Skill response
+They show the categories an agent actually needs in production:
 
-That proof matters because it turns the product story into something inspectable.
+- trade safety
+- wallet risk
+- execution timing
+- explanation
+- protection
+- signal discovery
 
-We are not merely claiming:
+That is why SkillStore reads more like a capability layer than a storefront.
 
-"The system could settle per-call."
+## Why OnchainOS Is Part of the Product Logic
 
-We are showing:
+We also did not want OnchainOS to appear as a namedrop in the footer.
 
-"This loop already produced onchain payment artifacts tied to real Skill invocations."
+The Skill layer is built around concrete OnchainOS surfaces:
 
-Judges and readers do not need to rely only on our description. They can inspect the chain artifacts directly.
+- Wallet API
+- Market API
+- Trade API
+- dex-signal
+- dex-trenches
+- dex-token
+- onchain-gateway
+- security
+- audit-log
+- Agent Trade Kit MCP
 
-## Multi-Agent Composition: One Skill Chain
+That matters because the marketplace is not selling generic compute.
 
-SkillStore is not designed for single-Skill calls in isolation.
+It is exposing packaged capabilities that sit on top of the OKX OnchainOS stack and can be consumed by other agents as callable units.
 
-The architecture is designed for agent chains where one Skill output feeds the next invocation input.
+That makes the product more defensible and also much easier to judge:
 
-A realistic agent workflow looks like this:
+- capability source is clear
+- payment rail is clear
+- chain is clear
+- receipt path is clear
 
-```
-Agent wants to trade 100 USDT0 → OKB on X Layer
+## A Better Way to Think About the Product
 
-1. Invoke GasOracle → recommended chain: X Layer, cost: $0.002, window: next 15 min
-2. Invoke TradeGuardian (wallet=0x..., tokenIn=USDT0, tokenOut=OKB, amount=100)
-   → signal: GO, route: USDT0 → OKB via XSwap, slippage: 0.12%
-3. Invoke MEVShield (txData=..., chain=X Layer)
-   → mevRisk: LOW, safe to broadcast
-4. Execute trade on X Layer
-5. Invoke PortfolioPulse → updated position narrative for user
-```
+The shallow description is:
 
-Each Skill call costs between 0.001 and 0.005 USDT0.
-Each call is paid via x402 with no human approval.
-Each call produces an auditId for the full invocation chain.
+"A place where developers publish Skills and agents buy them."
 
-That is a five-step agent workflow executed autonomously, paid autonomously, and logged onchain — all inside one execution context.
+The better description is:
 
-## Why This Is Infrastructure, Not Just an API Marketplace
+"A payment-settled invoke layer for reusable agent capabilities on X Layer."
 
-Traditional API marketplaces optimize for:
+That framing is stronger because it explains:
 
-- developer onboarding
-- API key management
-- subscription billing
-- usage dashboards
+- what the unit is: a capability invocation
+- what the price unit is: one call
+- what the payment protocol is: x402 exact settlement
+- what the chain role is: settlement and audit boundary
+- what the output is: result plus receipt
 
-SkillStore optimizes for something else:
-
-- agent-native discovery without human account creation
-- per-call machine payment via x402 with no subscription state
-- composable Skill chains where output feeds input
-- OnchainOS as the native capability layer, not a plugin
-- onchain audit records that any downstream agent can verify
-
-That is why SkillStore should be read as execution infrastructure for the agentic economy rather than as a hosted API catalog.
-
-If we express the stack more clearly, it looks like this:
-
-- agents define the workflow
-- SkillStore provides the capability discovery and monetization layer
-- x402 provides the machine-native per-call payment protocol
-- OnchainOS provides the verified onchain execution surface
-- X Layer provides the public settlement and audit layer
-
-That stack is more precise than saying "an App Store for AI."
-
-It says where trust is reduced, where payment is automated, and where public proof begins.
+That is infrastructure language, not marketplace language.
 
 ## What We Want Judges To See
 
-If a judge opens the project cold, we want them to understand five things quickly.
+If someone opens the project cold, we want five things to be obvious quickly.
 
-First, this is not a generic API directory with a crypto payment option.
+First, this is not a generic API listing site.
 
-Second, the payment flow is machine-executable from end to end — no human steps, no subscriptions.
+Second, the unit of value is a callable Skill, not an account subscription.
 
-Third, all six Skills are built directly on top of real OnchainOS capabilities, not mock endpoints.
+Third, x402 is part of the invoke path itself, not a decorative add-on.
 
-Fourth, x402 on X Layer is part of the execution architecture, not a decorative footer.
+Fourth, OnchainOS capabilities are the product surface, not just branding.
 
-Fifth, every invocation produces an auditable record that links a Skill call to an onchain event.
+Fifth, the result returns inside one auditable loop:
+
+`discover -> challenge -> authorize -> settle -> execute -> audit`
 
 That is the reading we want to make unavoidable.
 
 ## Closing
 
-The simplest way to say it is still the best one:
+The cleanest way to say it is still the simplest one:
 
-SkillStore makes AI capabilities composable, monetizable, and machine-payable on X Layer.
+When an agent needs a capability it does not own, SkillStore keeps discovery, payment, execution, and receipt inside one machine-native loop on X Layer.
 
 That loop is:
 
-`discover -> invoke -> pay via x402 -> result -> audit on X Layer`
+`discover -> challenge -> authorize -> settle -> execute -> audit`
 
-And the core submission claim is:
+And the core claim is:
 
-**Any agent. Any Skill. Per-call payment on X Layer. No humans required in the payment path.**
+**OnchainOS capabilities first. x402 settlement inline. Exact payment per call. Auditable invoke flow on X Layer.**
 
 If readers remember one sentence, we want it to be this:
 
-**SkillStore is the App Store for onchain AI Skills — where agents discover, pay, and execute in one uninterrupted machine flow.**
+**SkillStore is the execution layer that turns agent capabilities into paid, composable, onchain-callable infrastructure.**
 
 ## Suggested Footer Block For Publishing
 
 Project links:
 
 - Live demo: https://skillstore-xlayer.vercel.app
-- GitHub: https://github.com/yourusername/skillstore-xlayer
-- API docs: https://skillstore-xlayer.vercel.app/api/health
-- Skills list: https://skillstore-xlayer.vercel.app/api/skills
-- Skill invoke (A2A): https://skillstore-xlayer.vercel.app/api/skills/trade-guardian/invoke
-- X Layer USDT0: `0x779ded0c9e1022225f8e0630b35a9b54be713736`
-- OnchainOS: https://github.com/okx/onchainos-skills
-
-#XLayerHackathon #OnchainOS #x402 #AIAgent #XLayer
+- GitHub: https://github.com/richard7463/skillstore-xlayer
+- Skills API: https://skillstore-xlayer.vercel.app/api/skills
+- Health / proof: https://skillstore-xlayer.vercel.app/api/health
+- X Layer explorer: https://www.oklink.com/xlayer

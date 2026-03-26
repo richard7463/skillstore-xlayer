@@ -1,8 +1,24 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import {
+  X402_PAYMENT_HEADER,
+  X402_PAYMENT_RESPONSE_HEADER,
+  buildTransferWithAuthorizationTypedData,
+  createUnsignedX402Payment,
+  decodeBase64Json,
+  encodeX402PaymentHeader,
+  type X402Challenge,
+  type X402Requirement
+} from "@/lib/x402Shared";
+import { useSkillStoreWallet } from "@/app/components/SkillStoreWalletProvider";
+import { SKILLS as FALLBACK_SKILLS } from "@/lib/skills";
 
 // ── Types ──────────────────────────────────────────────────────────────────
+
+type EthereumProvider = {
+  request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;
+};
 
 type Skill = {
   id: string;
@@ -31,6 +47,37 @@ type InvokeResult = {
   auditId: string;
   network: string;
   freeTrial?: boolean;
+  note?: string;
+  payerAddress?: string;
+  txHash?: string;
+  payment?: {
+    amount: string;
+    amountBaseUnits: string;
+    payerAddress: string;
+    receiverAddress: string;
+    tokenSymbol: string;
+    tokenAddress: string;
+    txHash: string;
+    explorerUrl: string;
+    network: string;
+    chainId: number;
+  };
+  paymentResponse?: {
+    method?: string;
+    txHash?: string;
+    payer?: string;
+    amount?: string;
+    tokenSymbol?: string;
+    network?: string;
+  } | null;
+  x402?: {
+    symbol?: string;
+    payTo?: string;
+    assetAddress?: string;
+    priceLabel?: string;
+    priceBaseUnits?: string;
+    enabled?: boolean;
+  };
 };
 
 type A2AStep = {
@@ -41,6 +88,27 @@ type A2AStep = {
   response?: Record<string, unknown>;
 };
 
+function toMarketSkill(skill: (typeof FALLBACK_SKILLS)[number]): Skill {
+  return {
+    id: skill.id,
+    name: skill.name,
+    emoji: skill.emoji,
+    tagline: skill.tagline,
+    description: skill.description,
+    category: skill.category,
+    chains: skill.chains,
+    priceDisplay: skill.priceDisplay,
+    callCount: skill.callCount,
+    rating: skill.rating,
+    ratingCount: skill.ratingCount,
+    badge: skill.badge,
+    okxDependencies: skill.okxDependencies,
+    invokeUrl: `/api/skills/${skill.id}/invoke`
+  };
+}
+
+const FALLBACK_MARKET_SKILLS: Skill[] = FALLBACK_SKILLS.map(toMarketSkill);
+
 const CATEGORIES = ["all", "DeFi", "Risk", "Analytics", "Wallet", "Security"];
 
 const OKX_SKILLS = [
@@ -50,6 +118,17 @@ const OKX_SKILLS = [
 ];
 
 const PROOF_TX = "0x9c01ad8dac5f2fa1d77da8e9b3f2a3afbfe539ea68af7f3929d7bf9a5f3f5d67";
+
+function shortAddress(value?: string) {
+  if (!value) return "Not connected";
+  if (value.length <= 12) return value;
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function getEthereumProvider(): EthereumProvider | null {
+  if (typeof window === "undefined") return null;
+  return (window as Window & { ethereum?: EthereumProvider }).ethereum || null;
+}
 
 // ── Styles ─────────────────────────────────────────────────────────────────
 
@@ -264,32 +343,275 @@ function SkillModal({
   skill: Skill;
   onClose: () => void;
 }) {
-  const [loading, setLoading] = useState(false);
+  const {
+    privyEnabled,
+    ready: walletReady,
+    authenticated,
+    login,
+    getWalletProvider,
+    walletAddress: privyWalletAddress
+  } = useSkillStoreWallet();
+  const [workingMode, setWorkingMode] = useState<"free" | "paid" | null>(null);
   const [result, setResult] = useState<InvokeResult | null>(null);
   const [error, setError] = useState("");
   const [params, setParams] = useState<Record<string, string>>({});
+  const [fallbackWalletAddress, setFallbackWalletAddress] = useState("");
+  const [challengeMeta, setChallengeMeta] = useState<{
+    priceLabel?: string;
+    payTo?: string;
+    symbol?: string;
+    assetAddress?: string;
+  } | null>(null);
 
-  const invoke = async () => {
-    setLoading(true);
+  useEffect(() => {
+    if (privyWalletAddress) {
+      setFallbackWalletAddress(privyWalletAddress);
+      return;
+    }
+
+    const provider = getEthereumProvider();
+    if (!provider) return;
+    provider
+      .request({ method: "eth_accounts" })
+      .then((accounts) => {
+        const account = Array.isArray(accounts) ? String(accounts[0] || "") : "";
+        if (account) {
+          setFallbackWalletAddress(account);
+        }
+      })
+      .catch(() => {
+        // ignore wallet discovery failures
+      });
+  }, [privyWalletAddress]);
+
+  const loading = workingMode !== null;
+  const activeWalletAddress = privyWalletAddress || fallbackWalletAddress;
+
+  async function ensureWalletReady() {
+    if (privyEnabled) {
+      if (!walletReady) {
+        throw new Error("Privy wallet is still loading.");
+      }
+      if (!authenticated) {
+        await Promise.resolve(login());
+        throw new Error("Complete the Privy wallet connection, then retry the x402 payment.");
+      }
+
+      const provider = await getWalletProvider();
+      const account = privyWalletAddress || fallbackWalletAddress;
+      if (!provider || !account) {
+        throw new Error("Privy is connected, but no wallet provider is available.");
+      }
+
+      try {
+        await provider.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: "0xc4" }]
+        });
+      } catch {
+        // Embedded Privy wallets already follow the configured default chain.
+      }
+
+      setFallbackWalletAddress(account);
+      return { provider, account };
+    }
+
+    const provider = getEthereumProvider();
+    if (!provider) {
+      throw new Error("Connect a Privy wallet or install an injected wallet such as OKX Wallet to pay with x402.");
+    }
+
+    const accounts = (await provider.request({
+      method: "eth_requestAccounts"
+    })) as string[];
+    const account = String(accounts?.[0] || "");
+    if (!account) {
+      throw new Error("Wallet did not return an account.");
+    }
+
+    try {
+      await provider.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: "0xc4" }]
+      });
+    } catch (switchError) {
+      const code = Number((switchError as { code?: number })?.code);
+      if (code !== 4902) {
+        throw switchError;
+      }
+
+      await provider.request({
+        method: "wallet_addEthereumChain",
+        params: [
+          {
+            chainId: "0xc4",
+            chainName: "X Layer",
+            nativeCurrency: {
+              name: "OKB",
+              symbol: "OKB",
+              decimals: 18
+            },
+            rpcUrls: ["https://xlayer.drpc.org"],
+            blockExplorerUrls: ["https://www.oklink.com/xlayer"]
+          }
+        ]
+      });
+    }
+
+    setFallbackWalletAddress(account);
+    return { provider, account };
+  }
+
+  async function buildPaymentHeader(requirement: X402Requirement) {
+    const { provider, account } = await ensureWalletReady();
+    const unsignedPayment = createUnsignedX402Payment({
+      from: account,
+      requirement
+    });
+    const typedData = buildTransferWithAuthorizationTypedData(
+      requirement,
+      unsignedPayment.payload.authorization
+    );
+    const signature = (await provider.request({
+      method: "eth_signTypedData_v4",
+      params: [account, JSON.stringify(typedData)]
+    })) as string;
+
+    return {
+      account,
+      paymentHeader: encodeX402PaymentHeader({
+        ...unsignedPayment,
+        payload: {
+          ...unsignedPayment.payload,
+          signature
+        }
+      })
+    };
+  }
+
+  async function invokeFreeTrial() {
+    setWorkingMode("free");
     setError("");
     setResult(null);
+
     try {
       const res = await fetch(`/api/skills/${skill.id}/invoke`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ params })
       });
-      const data = await res.json();
+
+      const data = (await res.json().catch(() => ({}))) as InvokeResult & {
+        error?: string;
+      };
       if (res.status === 402) {
-        setError("Payment required (402). Attach X-PAYMENT header with x402 authorization to invoke in paid mode.");
-      } else {
-        setResult(data);
+        setChallengeMeta(data.x402 || null);
+        setError("Free trial is inactive for this skill. Use the paid x402 path below.");
+        return;
       }
-    } catch {
-      setError("Network error");
+      if (!res.ok) {
+        throw new Error(data.error || "Unable to invoke skill.");
+      }
+
+      setResult(data);
+      if (data.x402) {
+        setChallengeMeta(data.x402);
+      }
+    } catch (invokeError) {
+      setError(invokeError instanceof Error ? invokeError.message : "Network error");
     } finally {
-      setLoading(false);
+      setWorkingMode(null);
     }
+  }
+
+  async function invokePaid() {
+    setWorkingMode("paid");
+    setError("");
+    setResult(null);
+
+    try {
+      const endpoint = `/api/skills/${skill.id}/invoke?mode=paid`;
+      let response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ params })
+      });
+
+      if (response.status === 402) {
+        const challenge = (await response.json()) as X402Challenge & {
+          error?: string;
+          x402?: {
+            priceLabel?: string;
+            payTo?: string;
+            symbol?: string;
+            assetAddress?: string;
+          };
+        };
+        const requirement = challenge.accepts?.[0];
+        if (!requirement) {
+          throw new Error(challenge.error || "The x402 challenge did not include a payment requirement.");
+        }
+
+        setChallengeMeta(challenge.x402 || null);
+
+        const { paymentHeader } = await buildPaymentHeader(requirement);
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            [X402_PAYMENT_HEADER]: paymentHeader
+          },
+          body: JSON.stringify({ params })
+        });
+      }
+
+      const payload = (await response.json().catch(() => ({}))) as InvokeResult & {
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(payload.error || "Unable to invoke skill with x402.");
+      }
+
+      const paymentResponseHeader = response.headers.get(X402_PAYMENT_RESPONSE_HEADER);
+      const enrichedResult: InvokeResult = {
+        ...payload,
+        paymentResponse: paymentResponseHeader
+          ? decodeBase64Json<InvokeResult["paymentResponse"]>(paymentResponseHeader)
+          : null
+      };
+      setResult(enrichedResult);
+      if (payload.x402) {
+        setChallengeMeta(payload.x402);
+      }
+    } catch (invokeError) {
+      setError(
+        invokeError instanceof Error ? invokeError.message : "Unable to invoke skill with x402."
+      );
+    } finally {
+      setWorkingMode(null);
+    }
+  }
+
+  const x402PriceLabel = challengeMeta?.priceLabel || result?.x402?.priceLabel || `${skill.priceDisplay} USDT0`;
+  const x402PayTo = result?.payment?.receiverAddress || challengeMeta?.payTo || result?.x402?.payTo;
+  const x402Symbol =
+    result?.payment?.tokenSymbol || challengeMeta?.symbol || result?.x402?.symbol || "USDT0";
+  const paidActionLabel =
+    workingMode === "paid"
+      ? "Paying…"
+      : privyEnabled
+        ? walletReady
+          ? authenticated
+            ? "Invoke With Privy x402"
+            : "Connect Privy Wallet"
+          : "Wallet Loading…"
+        : "Invoke With x402";
+  const handlePaidAction = () => {
+    if (privyEnabled && walletReady && !authenticated) {
+      void Promise.resolve(login());
+      return;
+    }
+    void invokePaid();
   };
 
   return (
@@ -353,6 +675,25 @@ function SkillModal({
           </div>
         </div>
 
+        <div style={{ ...S.card, padding: 16, background: "rgba(59,130,246,0.08)", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Wallet</div>
+            <div style={{ fontWeight: 600, fontSize: 12 }}>{shortAddress(activeWalletAddress)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>x402 receiver</div>
+            <div style={{ fontWeight: 600, fontSize: 12 }}>{shortAddress(x402PayTo)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Paid invoke price</div>
+            <div style={{ fontWeight: 600, fontSize: 12 }}>{x402PriceLabel}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Settlement asset</div>
+            <div style={{ fontWeight: 600, fontSize: 12 }}>{x402Symbol}</div>
+          </div>
+        </div>
+
         {/* Supported chains */}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const }}>
           {skill.chains.map((c) => (
@@ -367,7 +708,7 @@ function SkillModal({
         {/* Invoke */}
         <div>
           <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}>
-            Test Invoke (Free Trial)
+            Invoke Skill
           </div>
           <div style={{ display: "flex", flexDirection: "column" as const, gap: 8, marginBottom: 12 }}>
             {skill.id === "trade-guardian" && (
@@ -381,13 +722,22 @@ function SkillModal({
               <input style={S.input} placeholder="wallet address (0x...)" onChange={(e) => setParams((p) => ({ ...p, wallet: e.target.value }))} />
             )}
           </div>
-          <button
-            style={{ ...S.btn, ...S.btnPrimary, width: "100%", padding: "10px 0" }}
-            onClick={invoke}
-            disabled={loading}
-          >
-            {loading ? "Invoking…" : "⚡ Invoke Skill (x402 — Free Trial)"}
-          </button>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <button
+              style={{ ...S.btn, width: "100%", padding: "10px 0" }}
+              onClick={invokeFreeTrial}
+              disabled={loading}
+            >
+              {workingMode === "free" ? "Invoking…" : "Test Invoke (Free Trial)"}
+            </button>
+            <button
+              style={{ ...S.btn, ...S.btnPrimary, width: "100%", padding: "10px 0" }}
+              onClick={handlePaidAction}
+              disabled={loading || (privyEnabled && !walletReady)}
+            >
+              {paidActionLabel}
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -397,15 +747,45 @@ function SkillModal({
         )}
 
         {result && (
-          <div>
-            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}>
-              Result
+          <div style={{ display: "flex", flexDirection: "column" as const, gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                Result
+              </div>
+              <div style={S.code}>{JSON.stringify(result.result, null, 2)}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 11, color: "var(--muted)" }}>
+                <span>auditId: {result.auditId}</span>
+                <span>{result.paymentMode}</span>
+              </div>
             </div>
-            <div style={S.code}>{JSON.stringify(result.result, null, 2)}</div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 11, color: "var(--muted)" }}>
-              <span>auditId: {result.auditId}</span>
-              <span>{result.paymentMode}</span>
-            </div>
+
+            {result.payment && (
+              <div style={{ ...S.card, padding: 16, background: "rgba(34,211,164,0.06)" }}>
+                <div style={{ fontSize: 11, color: "var(--accent2)", marginBottom: 8, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                  x402 Settlement
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 12 }}>
+                  <div>
+                    <div style={{ color: "var(--muted)", marginBottom: 4 }}>Amount</div>
+                    <div>{result.payment.amount} {result.payment.tokenSymbol}</div>
+                  </div>
+                  <div>
+                    <div style={{ color: "var(--muted)", marginBottom: 4 }}>Payer</div>
+                    <div>{shortAddress(result.payment.payerAddress)}</div>
+                  </div>
+                  <div>
+                    <div style={{ color: "var(--muted)", marginBottom: 4 }}>Receiver</div>
+                    <div>{shortAddress(result.payment.receiverAddress)}</div>
+                  </div>
+                  <div>
+                    <div style={{ color: "var(--muted)", marginBottom: 4 }}>TX</div>
+                    <a href={result.payment.explorerUrl} target="_blank" rel="noreferrer" style={{ color: "#60a5fa" }}>
+                      {shortAddress(result.payment.txHash)}
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -414,14 +794,24 @@ function SkillModal({
           <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}>
             API (Agent-to-Agent)
           </div>
-          <div style={S.code}>{`# Step 1: POST to invoke (free trial → 200 OK)
+          <div style={S.code}>{`# Step 1: POST to invoke (free trial path)
 curl -X POST /api/skills/${skill.id}/invoke \\
   -H "Content-Type: application/json" \\
   -d '{"params": {}}'
 
-# Step 2: In paid mode → 402 + challenge
-# Attach X-PAYMENT header with x402 authorization:
-# X-PAYMENT: <base64(transferWithAuthorization signed payload)>
+# Step 2: Force paid path to receive a 402 challenge
+curl -X POST '/api/skills/${skill.id}/invoke?mode=paid' \\
+  -H "Content-Type: application/json" \\
+  -d '{"params": {}}'
+
+# Step 3: Sign transferWithAuthorization and retry
+curl -X POST '/api/skills/${skill.id}/invoke?mode=paid' \\
+  -H "Content-Type: application/json" \\
+  -H "${X402_PAYMENT_HEADER}: <base64(signed x402 payload)>" \\
+  -d '{"params": {}}'
+
+# Success response headers
+# ${X402_PAYMENT_RESPONSE_HEADER}: <base64({ method, txHash, payer, amount, tokenSymbol, network })>
 # Network: X Layer mainnet (chain 196)
 # Asset: USDT0 (0x779ded0c9e1022225f8e0630b35a9b54be713736)`}</div>
         </div>
@@ -488,24 +878,22 @@ function A2ADemo() {
       method: "transferWithAuthorization",
       chain: "X Layer mainnet",
       amount: "0.003 USDT0",
-      signature: "0xd4c3b2a1..."
+      signature: "0xd4c3b2a1...",
+      settlement: "facilitator relays transferWithAuthorization onchain"
     });
 
     // Step 4: EXECUTE
     updateStep(4, "running");
     await new Promise((r) => setTimeout(r, 900));
-    try {
-      const res = await fetch("/api/skills/trade-guardian/invoke", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ params: { tokenIn: "USDT0", tokenOut: "OKB", amountIn: "50" } })
-      });
-      const data = await res.json();
-      updateStep(4, "done", data.result);
-      setFinalResult(data);
-    } catch {
-      updateStep(4, "done", { signal: "GO", auditId: "audit_0x7a3f..." });
-    }
+    const simulatedResult = {
+      signal: "GO",
+      auditId: "audit_0x7a3f...",
+      txHash: "0x9c01ad8d...",
+      paymentMode: "x402_exact",
+      recommendation: "Wallet funded, route clean — proceed."
+    };
+    updateStep(4, "done", simulatedResult);
+    setFinalResult(simulatedResult);
 
     setRunning(false);
   };
@@ -760,7 +1148,15 @@ function PublishModal({ onClose }: { onClose: () => void }) {
 // ── Main Page ──────────────────────────────────────────────────────────────
 
 export default function HomePage() {
-  const [skills, setSkills] = useState<Skill[]>([]);
+  const {
+    privyEnabled,
+    ready: walletReady,
+    authenticated,
+    login,
+    logout,
+    walletAddress
+  } = useSkillStoreWallet();
+  const [skills, setSkills] = useState<Skill[]>(FALLBACK_MARKET_SKILLS);
   const [category, setCategory] = useState("all");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Skill | null>(null);
@@ -774,10 +1170,16 @@ export default function HomePage() {
       if (category !== "all") params.set("category", category);
       if (query) params.set("q", query);
       const res = await fetch(`/api/skills?${params}`);
+      if (!res.ok) {
+        throw new Error(`skills request failed: ${res.status}`);
+      }
       const data = await res.json();
-      setSkills(data.skills || []);
+      const nextSkills = Array.isArray(data.skills) ? data.skills : [];
+      setSkills(nextSkills.length > 0 || query || category !== "all" ? nextSkills : FALLBACK_MARKET_SKILLS);
     } catch {
-      // keep existing
+      setSkills((prev) =>
+        prev.length > 0 ? prev : query || category !== "all" ? [] : FALLBACK_MARKET_SKILLS
+      );
     }
   }, [category, query]);
 
@@ -804,6 +1206,22 @@ export default function HomePage() {
     >{label}</button>
   );
 
+  const navWalletLabel = privyEnabled
+    ? authenticated && walletAddress
+      ? shortAddress(walletAddress)
+      : walletReady
+        ? "Connect Wallet"
+        : "Wallet Loading…"
+    : null;
+  const handleNavWallet = () => {
+    if (!privyEnabled) return;
+    if (authenticated) {
+      void Promise.resolve(logout());
+      return;
+    }
+    void Promise.resolve(login());
+  };
+
   return (
     <div style={S.page}>
       {/* Navbar */}
@@ -819,6 +1237,15 @@ export default function HomePage() {
           <span style={{ ...S.pill, background: "rgba(34,211,164,0.1)", color: "var(--accent2)", fontSize: 11 }}>
             ⚡ Free Trial Active
           </span>
+          {navWalletLabel && (
+            <button
+              style={{ ...S.btn, background: authenticated ? "rgba(59,130,246,0.12)" : "var(--surface2)", color: authenticated ? "#60a5fa" : "var(--text)" }}
+              onClick={handleNavWallet}
+              disabled={!walletReady}
+            >
+              {navWalletLabel}
+            </button>
+          )}
           <button
             style={{ ...S.btn, ...S.btnPrimary }}
             onClick={() => setPublishing(true)}

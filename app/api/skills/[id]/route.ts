@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSkillById } from "@/lib/skills";
-import { buildSkillChallenge, USDT0, XLAYER_CAIP2, isFreeTrial } from "@/lib/x402";
-
-const PAY_TO = process.env.XLAYER_PAY_TO_ADDRESS || "0x3f665386b41Fa15c5ccCeE983050a236E6a10108";
+import {
+  buildSkillChallenge,
+  getSkillPaymentAssetSummary,
+  getX402ConfigurationHint,
+  isFreeTrial,
+  isX402Configured,
+  XLAYER_CAIP2
+} from "@/lib/x402";
 
 export async function GET(
   _req: NextRequest,
@@ -12,18 +17,23 @@ export async function GET(
   if (!skill) return NextResponse.json({ error: "Skill not found" }, { status: 404 });
 
   const freeTrial = isFreeTrial();
+  const assetSummary = getSkillPaymentAssetSummary({
+    priceDisplay: skill.priceDisplay,
+    priceBaseUnits: skill.priceBaseUnits
+  });
 
   return NextResponse.json({
     ...skill,
     invokeUrl: `/api/skills/${skill.id}/invoke`,
     paymentInfo: {
       network: XLAYER_CAIP2,
-      asset: USDT0.address,
-      symbol: USDT0.symbol,
+      asset: assetSummary.assetAddress,
+      symbol: assetSummary.symbol,
       priceDisplay: skill.priceDisplay,
       priceBaseUnits: skill.priceBaseUnits,
-      payTo: PAY_TO,
+      payTo: assetSummary.payTo,
       freeTrial,
+      x402Configured: assetSummary.enabled,
       protocol: "x402 / transferWithAuthorization"
     }
   });
@@ -36,9 +46,12 @@ export async function POST(
   const skill = getSkillById(params.id);
   if (!skill) return NextResponse.json({ error: "Skill not found" }, { status: 404 });
 
-  const freeTrial = isFreeTrial();
-  if (freeTrial) {
+  if (isFreeTrial()) {
     return NextResponse.json({ error: "Use POST /api/skills/[id]/invoke to call a skill" }, { status: 405 });
+  }
+
+  if (!isX402Configured()) {
+    return NextResponse.json({ error: getX402ConfigurationHint() }, { status: 503 });
   }
 
   // Return 402 with challenge
@@ -48,8 +61,7 @@ export async function POST(
     skillName: skill.name,
     priceBaseUnits: skill.priceBaseUnits,
     priceDisplay: skill.priceDisplay,
-    resource,
-    payTo: PAY_TO
+    resource
   });
 
   return NextResponse.json(challenge, {

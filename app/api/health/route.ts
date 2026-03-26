@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { isFreeTrial, freeUntilLabel, USDT0, XLAYER_CAIP2 } from "@/lib/x402";
+import {
+  freeUntilLabel,
+  getX402ConfigurationHint,
+  isFreeTrial,
+  isX402Configured,
+  USDT0,
+  XLAYER_CAIP2
+} from "@/lib/x402";
 import { getTotalInvocations } from "@/lib/store";
 import { SKILLS } from "@/lib/skills";
 
@@ -13,6 +20,8 @@ export async function GET() {
     paymentAssetAddress: USDT0.address,
     freeTrial,
     freeUntil: freeTrial ? freeUntilLabel() : null,
+    x402Configured: isX402Configured(),
+    x402ConfigurationHint: getX402ConfigurationHint(),
     totalSkills: SKILLS.length,
     totalInvocations: getTotalInvocations(),
     onchainOsIntegrations: [

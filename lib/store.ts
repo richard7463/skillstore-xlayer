@@ -10,7 +10,7 @@ export type InvokeLog = {
   skillId: string;
   skillName: string;
   invokedAt: string;
-  paymentMode: "free_trial" | "x402" | "x402_verified";
+  paymentMode: "free_trial" | "x402" | "x402_verified" | "x402_exact";
   txHash?: string;
   payerAddress?: string;
   priceDisplay: string;
@@ -33,10 +33,30 @@ export type PublishedSkill = {
   callCount: number;
 };
 
+export type UserAccount = {
+  id: string;
+  email: string;
+  passwordHash: string;
+  createdAt: string;
+  authProvider?: "local" | "privy";
+  privyUserId?: string;
+  walletAddress?: string;
+};
+
+export type AuthSession = {
+  id: string;
+  userId: string;
+  token: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
 type Store = {
   logs: InvokeLog[];
   published: PublishedSkill[];
   totalInvocations: number;
+  users: UserAccount[];
+  sessions: AuthSession[];
 };
 
 const DATA_FILE =
@@ -47,9 +67,16 @@ const DATA_FILE =
 function readStore(): Store {
   try {
     const raw = fs.readFileSync(DATA_FILE, "utf8");
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw) as Partial<Store>;
+    return {
+      logs: parsed.logs || [],
+      published: parsed.published || [],
+      totalInvocations: parsed.totalInvocations || 0,
+      users: parsed.users || [],
+      sessions: parsed.sessions || []
+    };
   } catch {
-    return { logs: [], published: [], totalInvocations: 0 };
+    return { logs: [], published: [], totalInvocations: 0, users: [], sessions: [] };
   }
 }
 
@@ -102,4 +129,15 @@ export function addPublishedSkill(skill: Omit<PublishedSkill, "id" | "publishedA
 export function getPublishedSkills(): PublishedSkill[] {
   const store = readStore();
   return store.published;
+}
+
+export async function readDb(): Promise<Store> {
+  return readStore();
+}
+
+export async function updateDb(mutator: (draft: Store) => void | Promise<void>) {
+  const store = readStore();
+  await mutator(store);
+  writeStore(store);
+  return store;
 }
