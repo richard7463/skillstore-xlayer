@@ -21,7 +21,7 @@ It is `transferWithAuthorization` on X Layer mainnet with USDT0. Every invocatio
 Project links:
 
 - Live demo: https://skillstore-xlayer.vercel.app
-- GitHub: https://github.com/yourusername/skillstore-xlayer
+- GitHub: https://github.com/richard7463/skillstore-xlayer
 - X Layer explorer: https://www.oklink.com/xlayer
 - Skills API: https://skillstore-xlayer.vercel.app/api/skills
 
