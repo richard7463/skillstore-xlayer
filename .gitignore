@@ -1,0 +1,8 @@
+node_modules/
+.next/
+.skillstore-data.json
+.env
+.env.local
+.env*.local
+*.log
+.vercel
