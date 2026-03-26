@@ -3,7 +3,16 @@
 // Token: USDT0 (0x779ded0c9e1022225f8e0630b35a9b54be713736)
 
 import crypto from "crypto";
-import { createPublicClient, http, parseAbiItem, defineChain, type Hash } from "viem";
+import {
+  createPublicClient,
+  http,
+  parseAbiItem,
+  defineChain,
+  type Hash,
+  verifyTypedData,
+  getAddress,
+  isAddress
+} from "viem";
 
 // X Layer mainnet chain definition
 const xlayer = defineChain({
@@ -40,6 +49,18 @@ export const USDT0 = {
   address: "0x779ded0c9e1022225f8e0630b35a9b54be713736",
   decimals: 6
 };
+
+// EIP-3009 typed data types for transferWithAuthorization (x402 / exact scheme)
+export const transferWithAuthorizationTypes = {
+  TransferWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" }
+  ]
+} as const;
 
 export type X402Requirement = {
   scheme: "exact";
@@ -122,6 +143,7 @@ export function buildSkillChallenge(input: {
           symbol: USDT0.symbol,
           decimals: USDT0.decimals,
           name: USDT0.name,
+          version: "",
           displayAmount: input.priceDisplay,
           skillId: input.skillId,
           resourceType: "skill_invocation"
@@ -131,8 +153,54 @@ export function buildSkillChallenge(input: {
   };
 }
 
-// Validate payment payload structure (no chain call — for demo/free mode)
-export function validatePaymentStructure(payment: X402PaymentPayload, requirement: X402Requirement) {
+function normalizeBytes32Nonce(value: string) {
+  const raw = String(value || "").trim();
+  if (/^0x[0-9a-fA-F]{64}$/.test(raw)) return raw as `0x${string}`;
+  return raw;
+}
+
+function safeAddress(value: string) {
+  return isAddress(value) ? getAddress(value) : "";
+}
+
+export function buildTransferWithAuthorizationTypedData(
+  requirement: X402Requirement,
+  authorization: X402Authorization
+) {
+  const extra = requirement.extra || {};
+  const domain: {
+    name: string;
+    chainId: number;
+    verifyingContract: `0x${string}`;
+    version?: string;
+  } = {
+    name: String(extra.name || extra.symbol || "USD₮0"),
+    chainId: XLAYER_CHAIN_ID,
+    verifyingContract: getAddress(requirement.asset) as `0x${string}`
+  };
+  const version = String(extra.version || "").trim();
+  if (version) domain.version = version;
+
+  return {
+    domain,
+    types: transferWithAuthorizationTypes,
+    primaryType: "TransferWithAuthorization" as const,
+    message: {
+      from: getAddress(authorization.from),
+      to: getAddress(authorization.to),
+      value: BigInt(authorization.value),
+      validAfter: BigInt(authorization.validAfter),
+      validBefore: BigInt(authorization.validBefore),
+      nonce: normalizeBytes32Nonce(authorization.nonce) as `0x${string}`
+    }
+  };
+}
+
+// Validate payment payload structure + semantic checks (no chain call)
+export async function validatePaymentStructure(
+  payment: X402PaymentPayload,
+  requirement: X402Requirement
+) {
   if (payment.x402Version !== X402_VERSION) throw new Error(`Unsupported x402 version`);
   if (payment.scheme !== X402_SCHEME) throw new Error(`Unsupported scheme`);
   if (payment.network !== requirement.network) throw new Error(`Wrong network`);
@@ -141,10 +209,35 @@ export function validatePaymentStructure(payment: X402PaymentPayload, requiremen
   if (!auth) throw new Error(`Missing authorization`);
 
   const nowSeconds = Math.floor(Date.now() / 1000);
+  const validAfter = Number(auth.validAfter);
+  if (!Number.isFinite(validAfter) || validAfter > nowSeconds) {
+    throw new Error(`Payment authorization is not yet valid`);
+  }
   const validBefore = Number(auth.validBefore);
   if (validBefore <= nowSeconds) throw new Error(`Payment authorization has expired`);
 
-  return true;
+  const to = safeAddress(auth.to);
+  const payTo = safeAddress(requirement.payTo);
+  if (!to || !payTo) throw new Error(`Invalid payTo or authorization.to address`);
+  if (to !== payTo) throw new Error(`Authorization receiver does not match payTo`);
+
+  if (String(auth.value) !== String(requirement.maxAmountRequired)) {
+    throw new Error(`Authorization amount does not match required amount`);
+  }
+
+  // Verify the EIP-712 signature matches the authorization
+  const typedData = buildTransferWithAuthorizationTypedData(requirement, auth);
+  const verified = await verifyTypedData({
+    address: getAddress(auth.from),
+    domain: typedData.domain,
+    types: typedData.types,
+    primaryType: typedData.primaryType,
+    message: typedData.message,
+    signature: payment.payload.signature as `0x${string}`
+  });
+  if (!verified) throw new Error(`x402 signature verification failed`);
+
+  return true as const;
 }
 
 export type OnchainVerifyResult = {

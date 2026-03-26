@@ -11,7 +11,11 @@ import {
 } from "@/lib/x402";
 import { addInvokeLog } from "@/lib/store";
 
-const PAY_TO = process.env.XLAYER_PAY_TO_ADDRESS || "0x3f665386b41Fa15c5ccCeE983050a236E6a10108";
+// Prefer ai2human-style env naming, fallback to legacy var
+const PAY_TO =
+  process.env.XLAYER_X402_PAY_TO_ADDRESS ||
+  process.env.XLAYER_PAY_TO_ADDRESS ||
+  "0x3f665386b41Fa15c5ccCeE983050a236E6a10108";
 
 // Simulate OnchainOS API calls — in a real build these would call OKX endpoints
 function simulateOnchainOsPrecheck(skillId: string, input: Record<string, unknown>) {
@@ -166,7 +170,7 @@ export async function POST(
         payTo: PAY_TO
       });
       const payment = decodePaymentHeader(paymentHeader);
-      validatePaymentStructure(payment, challenge.accepts[0]);
+      await validatePaymentStructure(payment, challenge.accepts[0]);
 
       // Extract txHash from payload (agent passes it after broadcasting transferWithAuthorization)
       txHash = (payment.payload as Record<string, unknown>).txHash as string | undefined;
